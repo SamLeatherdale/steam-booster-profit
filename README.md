@@ -17,7 +17,7 @@ The extension only reads the page and the Steam Community Market. It does not cr
 
 ## Install
 
-You need Node.js, npm, and Chrome. Sign in to Steam in that browser before you open the Booster Pack Creator.
+You need Node.js, pnpm, and Chrome. Sign in to Steam in that browser before you open the Booster Pack Creator. The pnpm version is pinned in `package.json`; if `pnpm` is not on your PATH, run `corepack enable` first.
 
 ### Load a development build
 
@@ -26,13 +26,13 @@ The dev server has to keep running. Reloading the extension in Chrome does not r
 1. Install dependencies:
 
    ```sh
-   npm install
+   pnpm install
    ```
 
 2. Start the dev server:
 
    ```sh
-   npm run dev
+   pnpm dev
    ```
 
 3. Open `chrome://extensions`.
@@ -46,9 +46,9 @@ The dev server has to keep running. Reloading the extension in Chrome does not r
 1. Build the extension:
 
    ```sh
-   npm run build
+   pnpm build
    ```
 
 2. On `chrome://extensions`, select **Load unpacked** and choose `.output/chrome-mv3`.
 
-You can close the terminal after the build finishes. Run `npm test` to execute the unit tests.
+You can close the terminal after the build finishes. Run `pnpm test` to execute the unit tests.
