@@ -1,6 +1,6 @@
 {
-  "name": "steam-booster-profit",
-  "description": "Rank booster packs you can craft by what they sell for per gem.",
+  "name": "steam-card-toolkit",
+  "description": "Preview badge artwork for a trading card, and rank booster packs by what they sell for per gem.",
   "private": true,
   "version": "0.1.0",
   "type": "module",
