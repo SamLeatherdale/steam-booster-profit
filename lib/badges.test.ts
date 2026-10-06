@@ -3,11 +3,16 @@ import {
   BADGE_PAGE_MESSAGE,
   appidFromGamecardsHref,
   stepBadgeIndex,
+  BADGE_PRICE_TTL_MS,
   badgeCatalogKey,
   badgeLevelCaption,
+  badgePriceCaption,
+  badgePriceKey,
   badgeRequestKey,
   createBadgeLoader,
   extractBadgeCatalog,
+  extractBadgePrices,
+  readBadgePriceSnapshot,
   parseCardExchangeBadges,
   readBadgeCatalog,
   readBadgePageAppid,
@@ -16,6 +21,39 @@ import {
   selectBadgeLevels,
   seriesForCardName,
 } from './badges';
+
+const pricedCards = `
+<div class="header"><span id="series-1-cards"></span></div>
+<div class="grid">
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/card-a.png" alt="Series 1 - Card 1 of 2 - Action">
+    <a>Price: $0.07</a>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/card-b.png" alt="Series 1 - Card 2 of 2 - Adventure">
+    <a>Price: $0.06</a>
+  </div>
+</div>
+<div class="header"><span id="series-1-foilcards"></span></div>
+<div class="grid">
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/foil-a.png" alt="Series 1 - Card 1 of 2 - Action">
+    <a>Price: €1,20</a>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/foil-b.png" alt="Series 1 - Card 2 of 2 - Adventure">
+    <a>Price: €0,30</a>
+  </div>
+</div>
+<div class="header"><span id="series-1-badges"></span></div>
+<div class="grid">
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/lvl1.png" alt="Series 1 - Level 1">
+    <div>Level One</div>
+    <div><div>Level 1</div></div>
+  </div>
+</div>
+`;
 
 const summerSale = `
 <div class="header"><span id="series-1-badges"></span></div>
@@ -147,6 +185,23 @@ describe('badge pages', () => {
     expect(badgeLevelCaption({ foil: true, levelLabel: 'Level 1000+' })).toBe('Foil 1000+');
   });
 
+  it('sums regular and foil card prices into one set price each', () => {
+    expect(extractBadgePrices(pricedCards)).toEqual({
+      '1': { regular: '$0.13', foil: '€1,50' },
+    });
+    expect(extractBadgePrices(pricedCards.replace('Price: $0.06', 'Price: NA'))).toEqual({
+      '1': { regular: null, foil: '€1,50' },
+    });
+    expect(badgePriceCaption({ regular: '$0.57', foil: '$4.51' })).toBe('Regular $0.57 · Foil $4.51');
+    expect(badgePriceCaption({ regular: '$0.57', foil: null })).toBe('Regular $0.57');
+    expect(badgePriceKey(1658760)).toBe('badge-prices-v1:1658760');
+    expect(readBadgePriceSnapshot({ updatedAt: 10, series: { '1': { regular: '$0.57', foil: null } } })?.series['1']).toEqual({
+      regular: '$0.57',
+      foil: null,
+    });
+    expect(readBadgePriceSnapshot({ updatedAt: 10, series: { '1': { regular: 'free', foil: null } } })).toBeNull();
+  });
+
   it('picks the series that contains the card name and appends that series foil badge', () => {
     expect(seriesForCardName(firewatch, 'You Fell Off')).toBe(2);
     expect(selectBadgeLevels(firewatch, { cardName: 'Volunteer', seriesHint: null })).toEqual([
@@ -268,7 +323,8 @@ describe('badge catalog cache', () => {
     const request = { appid: 383870, cardName: 'Volunteer', seriesHint: null };
     const first = await loader.load(request);
     await loader.load({ appid: 383870, cardName: 'You Fell Off', seriesHint: 1 });
-    expect(first[0]?.name).toBe('Communicator');
+    expect(first.levels[0]?.name).toBe('Communicator');
+    expect(first.prices).toEqual({ regular: null, foil: null });
     expect(read).toHaveBeenCalledOnce();
     expect(read).toHaveBeenCalledWith(383870);
     expect(fetchText).not.toHaveBeenCalled();
@@ -285,6 +341,46 @@ describe('badge catalog cache', () => {
     expect(write).toHaveBeenCalledOnce();
     expect(write).toHaveBeenCalledWith(383870, extractBadgeCatalog(firewatch));
   });
+
+  it('refreshes a stale set price without rewriting the artwork catalog', async () => {
+    const now = 1_000_000;
+    const catalog = extractBadgeCatalog(pricedCards);
+    const fetchText = vi.fn(async () => pricedCards);
+    const read = vi.fn(async () => catalog);
+    const write = vi.fn(async () => undefined);
+    const readPrices = vi.fn(async () => ({
+      updatedAt: now - BADGE_PRICE_TTL_MS,
+      series: { '1': { regular: '$0.01', foil: null } },
+    }));
+    const writePrices = vi.fn(async () => undefined);
+    const loader = createBadgeLoader(fetchText, { read, write, readPrices, writePrices }, () => now);
+    const preview = await loader.load({ appid: 1658760, cardName: 'Action', seriesHint: null });
+    expect(preview.levels[0]?.name).toBe('Level One');
+    expect(preview.prices).toEqual({ regular: '$0.13', foil: '€1,50' });
+    expect(fetchText).toHaveBeenCalledOnce();
+    expect(write).not.toHaveBeenCalled();
+    expect(writePrices).toHaveBeenCalledWith(1658760, { updatedAt: now, series: extractBadgePrices(pricedCards) });
+  });
+
+  it('reuses a fresh set price without fetching the game page', async () => {
+    const now = 1_000_000;
+    const catalog = extractBadgeCatalog(pricedCards);
+    const fetchText = vi.fn(async () => pricedCards);
+    const stored = { updatedAt: now - 1_000, series: { '1': { regular: '$0.57', foil: '$4.51' } } };
+    const loader = createBadgeLoader(
+      fetchText,
+      {
+        read: async () => catalog,
+        write: async () => undefined,
+        readPrices: async () => stored,
+        writePrices: async () => undefined,
+      },
+      () => now,
+    );
+    const preview = await loader.load({ appid: 1658760, cardName: 'Action', seriesHint: 1 });
+    expect(preview.prices).toEqual(stored.series['1']);
+    expect(fetchText).not.toHaveBeenCalled();
+  });
 });
 
 describe('badge loader', () => {
@@ -294,7 +390,7 @@ describe('badge loader', () => {
     const request = { appid: 383870, cardName: 'Volunteer', seriesHint: null };
     const first = await loader.load(request);
     const second = await loader.load(request);
-    expect(first.map((badge) => [badge.name, badge.foil])).toEqual([
+    expect(first.levels.map((badge) => [badge.name, badge.foil])).toEqual([
       ['Communicator', false],
       ['Cartographer', false],
       ['Lookout', true],

@@ -2,10 +2,12 @@ import {
   BADGE_PAGE_MESSAGE,
   appidFromGamecardsHref,
   badgeCatalogKey,
+  badgePriceKey,
   badgeRequestKey,
   createBadgeLoader,
   readBadgeCatalog,
   readBadgePageHtml,
+  readBadgePriceSnapshot,
   readBadgeRequest,
   type BadgeRequest,
 } from '../../lib/badges';
@@ -59,6 +61,14 @@ const badges = createBadgeLoader(
     },
     async write(appid, catalog) {
       await browser.storage.local.set({ [badgeCatalogKey(appid)]: catalog });
+    },
+    async readPrices(appid) {
+      const key = badgePriceKey(appid);
+      const stored = await browser.storage.local.get(key);
+      return readBadgePriceSnapshot(stored[key]);
+    },
+    async writePrices(appid, snapshot) {
+      await browser.storage.local.set({ [badgePriceKey(appid)]: snapshot });
     },
   },
 );
@@ -227,10 +237,11 @@ function mountGamecard(): void {
 }
 
 async function fillNextBadge(circle: HTMLElement, request: BadgeRequest, foilPage: boolean): Promise<void> {
-  const [levels, progress] = await Promise.all([
-    badges.load(request).catch(() => []),
+  const [preview, progress] = await Promise.all([
+    badges.load(request).catch(() => null),
     progressForGamecard(foilPage),
   ]);
+  const levels = preview?.levels ?? [];
   if (!progress || !circle.isConnected) return;
   const next = nextBadgeLevel(levels, progress, foilPage);
   if (!next) return;

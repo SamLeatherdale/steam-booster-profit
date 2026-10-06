@@ -1,3 +1,5 @@
+import { formatLike, parseWalletCents } from './prices';
+
 export interface BadgeLevel {
   /** First crafted level that uses this artwork. */
   level: number;
@@ -69,6 +71,21 @@ export function readBadgeRequest(link: HTMLAnchorElement): BadgeRequest | null {
 
 const CARD_ALT = /^Series\s+(\d+)\s+-\s+Card\s+\d+\s+of\s+\d+\s+-\s+(.+)$/i;
 
+export interface BadgeSetPrices {
+  regular: string | null;
+  foil: string | null;
+}
+
+export interface BadgePreview {
+  levels: BadgeLevel[];
+  prices: BadgeSetPrices;
+}
+
+export interface BadgePriceSnapshot {
+  updatedAt: number;
+  series: Record<string, BadgeSetPrices>;
+}
+
 export interface BadgeCatalog {
   cards: Record<string, number>;
   series: Record<string, BadgeLevel[]>;
@@ -77,6 +94,23 @@ export interface BadgeCatalog {
 export interface BadgeCatalogStore {
   read(appid: number): Promise<BadgeCatalog | null>;
   write(appid: number, catalog: BadgeCatalog): Promise<void>;
+  readPrices?(appid: number): Promise<BadgePriceSnapshot | null>;
+  writePrices?(appid: number, snapshot: BadgePriceSnapshot): Promise<void>;
+}
+
+export const BADGE_PRICE_TTL_MS = 30 * 60 * 1000;
+
+const EMPTY_PRICES: BadgeSetPrices = { regular: null, foil: null };
+
+export function badgePriceKey(appid: number): string {
+  return `badge-prices-v1:${appid}`;
+}
+
+export function badgePriceCaption(prices: BadgeSetPrices): string {
+  const parts: string[] = [];
+  if (prices.regular) parts.push(`Regular ${prices.regular}`);
+  if (prices.foil) parts.push(`Foil ${prices.foil}`);
+  return parts.join(' · ');
 }
 
 export function badgeCatalogKey(appid: number): string {
@@ -148,12 +182,7 @@ export function readBadgeCatalog(value: unknown): BadgeCatalog | null {
 }
 
 function parseBadges(document: Document, series: number, foil: boolean): BadgeLevel[] {
-  const anchor = document.getElementById(`series-${series}-${foil ? 'foilbadges' : 'badges'}`);
-  if (!anchor) return [];
-  let section = anchor.parentElement?.nextElementSibling ?? null;
-  for (let step = 0; section && step < 3 && section.querySelector('img') == null; step += 1) {
-    section = section.nextElementSibling;
-  }
+  const section = sectionAfter(document.getElementById(`series-${series}-${foil ? 'foilbadges' : 'badges'}`));
   if (!section) return [];
 
   const levels: BadgeLevel[] = [];
@@ -196,6 +225,150 @@ export function selectCatalogLevels(
   catalog: BadgeCatalog,
   request: Pick<BadgeRequest, 'seriesHint' | 'cardName'>,
 ): BadgeLevel[] {
+  const series = matchingSeries(catalog, request);
+  return series ? (catalog.series[series] ?? []) : [];
+}
+
+export function selectCatalogPreview(
+  catalog: BadgeCatalog,
+  prices: Record<string, BadgeSetPrices>,
+  request: Pick<BadgeRequest, 'seriesHint' | 'cardName'>,
+): BadgePreview {
+  const series = matchingSeries(catalog, request);
+  return {
+    levels: series ? (catalog.series[series] ?? []) : [],
+    prices: (series && prices[series]) || EMPTY_PRICES,
+  };
+}
+
+export function extractBadgePrices(html: string): Record<string, BadgeSetPrices> {
+  const document = new DOMParser().parseFromString(html, 'text/html');
+  const seriesNumbers = new Set<number>();
+  for (const node of document.querySelectorAll('[id^="series-"]')) {
+    const match = /^series-(\d+)-(?:foil)?cards$/.exec(node.id);
+    const series = Number(match?.[1]);
+    if (Number.isInteger(series) && series >= 1) seriesNumbers.add(series);
+  }
+
+  const prices: Record<string, BadgeSetPrices> = {};
+  for (const series of [...seriesNumbers].sort((left, right) => left - right)) {
+    const regular = sumCardPrices(document, `series-${series}-cards`);
+    const foil = sumCardPrices(document, `series-${series}-foilcards`);
+    if (regular || foil) prices[String(series)] = { regular, foil };
+  }
+  return prices;
+}
+
+export function readBadgePriceSnapshot(value: unknown): BadgePriceSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as { updatedAt?: unknown; series?: unknown };
+  if (typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)) return null;
+  if (!record.series || typeof record.series !== 'object' || Array.isArray(record.series)) return null;
+
+  const series: Record<string, BadgeSetPrices> = {};
+  for (const [key, prices] of Object.entries(record.series as Record<string, unknown>)) {
+    if (!/^[1-9]\d*$/.test(key)) return null;
+    const parsed = readSetPrices(prices);
+    if (!parsed) return null;
+    series[key] = parsed;
+  }
+  return { updatedAt: record.updatedAt, series };
+}
+
+export function createBadgeLoader(
+  fetchText: (url: string) => Promise<string>,
+  store?: BadgeCatalogStore,
+  now: () => number = Date.now,
+): {
+  load(request: BadgeRequest): Promise<BadgePreview>;
+} {
+  const bundles = new Map<number, Promise<BadgeBundle>>();
+  const previews = new Map<string, BadgePreview>();
+
+  return {
+    async load(request) {
+      const key = badgeRequestKey(request);
+      const cached = previews.get(key);
+      if (cached) return cached;
+
+      let bundle = bundles.get(request.appid);
+      if (!bundle) {
+        bundle = loadBundle(request.appid, fetchText, store, now).catch((error: unknown) => {
+          bundles.delete(request.appid);
+          throw error;
+        });
+        bundles.set(request.appid, bundle);
+      }
+
+      const loaded = await bundle;
+      const preview = selectCatalogPreview(loaded.catalog, loaded.prices, request);
+      if (preview.levels.length > 0) previews.set(key, preview);
+      return preview;
+    },
+  };
+}
+
+async function loadBundle(
+  appid: number,
+  fetchText: (url: string) => Promise<string>,
+  store: BadgeCatalogStore | undefined,
+  now: () => number,
+): Promise<BadgeBundle> {
+  let storedCatalog: BadgeCatalog | null = null;
+  let storedPrices: BadgePriceSnapshot | null = null;
+  if (store) {
+    try {
+      storedCatalog = await store.read(appid);
+    } catch {
+      // Storage can be unavailable. The network result is still shown.
+    }
+    if (store.readPrices) {
+      try {
+        storedPrices = await store.readPrices(appid);
+      } catch {
+        // A bad price cache should not hide badge artwork.
+      }
+    }
+  }
+
+  const pricesFresh = storedPrices != null && now() - storedPrices.updatedAt < BADGE_PRICE_TTL_MS;
+  if (storedCatalog && (pricesFresh || !store?.readPrices)) {
+    return { catalog: storedCatalog, prices: storedPrices?.series ?? {} };
+  }
+
+  let html: string;
+  try {
+    html = await fetchText(cardExchangeGameUrl(appid));
+  } catch (error) {
+    if (storedCatalog) return { catalog: storedCatalog, prices: storedPrices?.series ?? {} };
+    throw error;
+  }
+
+  const catalog = storedCatalog ?? extractBadgeCatalog(html);
+  const prices = extractBadgePrices(html);
+  if (store && !storedCatalog && Object.keys(catalog.series).length > 0) {
+    try {
+      await store.write(appid, catalog);
+    } catch {
+      // A full extension quota should not hide badges that were just fetched.
+    }
+  }
+  if (store?.writePrices) {
+    try {
+      await store.writePrices(appid, { updatedAt: now(), series: prices });
+    } catch {
+      // Prices can be shown for this visit even when they cannot be saved.
+    }
+  }
+  return { catalog, prices };
+}
+
+interface BadgeBundle {
+  catalog: BadgeCatalog;
+  prices: Record<string, BadgeSetPrices>;
+}
+
+function matchingSeries(catalog: BadgeCatalog, request: Pick<BadgeRequest, 'seriesHint' | 'cardName'>): string | null {
   const seriesNumbers: number[] = [];
   const add = (series: number | null): void => {
     if (series == null || !Number.isInteger(series) || series < 1 || seriesNumbers.includes(series)) return;
@@ -205,66 +378,60 @@ export function selectCatalogLevels(
   add(request.seriesHint);
   add(1);
   for (const series of seriesNumbers) {
-    const levels = catalog.series[String(series)];
-    if (levels && levels.length > 0) return levels;
+    const key = String(series);
+    const levels = catalog.series[key];
+    if (levels && levels.length > 0) return key;
   }
-  return [];
+  return null;
 }
 
-export function createBadgeLoader(
-  fetchText: (url: string) => Promise<string>,
-  store?: BadgeCatalogStore,
-): {
-  load(request: BadgeRequest): Promise<BadgeLevel[]>;
-} {
-  const catalogs = new Map<number, Promise<BadgeCatalog>>();
-  const previews = new Map<string, BadgeLevel[]>();
-
-  return {
-    async load(request) {
-      const key = badgeRequestKey(request);
-      const cached = previews.get(key);
-      if (cached) return cached;
-
-      let catalog = catalogs.get(request.appid);
-      if (!catalog) {
-        catalog = loadCatalog(request.appid, fetchText, store).catch((error: unknown) => {
-          catalogs.delete(request.appid);
-          throw error;
-        });
-        catalogs.set(request.appid, catalog);
-      }
-
-      const levels = selectCatalogLevels(await catalog, request);
-      if (levels.length > 0) previews.set(key, levels);
-      return levels;
-    },
-  };
+function sectionAfter(anchor: HTMLElement | null): Element | null {
+  if (!anchor) return null;
+  let section = anchor.parentElement?.nextElementSibling ?? null;
+  for (let step = 0; section && step < 3 && section.querySelector('img') == null; step += 1) {
+    section = section.nextElementSibling;
+  }
+  return section;
 }
 
-async function loadCatalog(
-  appid: number,
-  fetchText: (url: string) => Promise<string>,
-  store: BadgeCatalogStore | undefined,
-): Promise<BadgeCatalog> {
-  if (store) {
-    try {
-      const stored = await store.read(appid);
-      if (stored) return stored;
-    } catch {
-      // Storage can be unavailable. The network result is still shown.
-    }
+function sumCardPrices(document: Document, id: string): string | null {
+  const section = sectionAfter(document.getElementById(id));
+  if (!section) return null;
+  const cents: number[] = [];
+  let sample: string | null = null;
+  for (const card of section.children) {
+    const line = [...card.querySelectorAll('a')]
+      .map((link) => link.textContent?.trim().replace(/\s+/g, ' ') ?? '')
+      .find((text) => /^Price:/i.test(text));
+    if (!line) continue;
+    const amount = line.replace(/^Price:\s*/i, '').trim();
+    const value = parseWalletCents(amount);
+    if (value == null) return null;
+    sample ??= amount;
+    cents.push(value);
   }
+  if (!sample || cents.length === 0) return null;
+  return formatLike(
+    cents.reduce((sum, value) => sum + value, 0),
+    sample,
+  );
+}
 
-  const catalog = extractBadgeCatalog(await fetchText(cardExchangeGameUrl(appid)));
-  if (store && Object.keys(catalog.series).length > 0) {
-    try {
-      await store.write(appid, catalog);
-    } catch {
-      // A full extension quota should not hide badges that were just fetched.
-    }
-  }
-  return catalog;
+function readSetPrices(value: unknown): BadgeSetPrices | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as { regular?: unknown; foil?: unknown };
+  const regular = readPriceLabel(record.regular);
+  const foil = readPriceLabel(record.foil);
+  if (regular === undefined || foil === undefined) return null;
+  return { regular, foil };
+}
+
+function readPriceLabel(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 32 || parseWalletCents(trimmed) == null) return undefined;
+  return trimmed;
 }
 
 function readBadgeLevel(value: unknown): BadgeLevel | null {

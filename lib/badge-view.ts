@@ -1,4 +1,14 @@
-import { badgeLevelCaption, badgeRequestKey, cardExchangeGameUrl, stepBadgeIndex, type BadgeLevel, type BadgeRequest } from './badges';
+import {
+  badgeLevelCaption,
+  badgePriceCaption,
+  badgeRequestKey,
+  cardExchangeGameUrl,
+  stepBadgeIndex,
+  type BadgeLevel,
+  type BadgePreview,
+  type BadgeRequest,
+  type BadgeSetPrices,
+} from './badges';
 import { badgeIsOwned, type BadgeProgress } from './badge-progress';
 
 export const BADGE_STYLE = `
@@ -81,6 +91,16 @@ a.steam-booster-badge-exchange {
 }
 .steam-booster-badge-panel > a.steam-booster-badge-exchange {
   margin: 0 0 8px;
+}
+.steam-booster-badge-prices {
+  margin: 0 0 8px;
+  color: #c6d4df;
+}
+.steam-booster-badge-prices[hidden] {
+  display: none !important;
+}
+.steam-booster-badge-modal-figure .steam-booster-badge-prices {
+  margin: 8px 0 0;
 }
 .steam-booster-badge-modal-figure a.steam-booster-badge-exchange {
   margin: 12px 0 0;
@@ -260,29 +280,41 @@ function createExchangeLink(): HTMLAnchorElement {
   return link;
 }
 
-export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Promise<BadgeLevel[]>): BadgePresenter {
+export function createBadgePresenter(loadPreview: (request: BadgeRequest) => Promise<BadgePreview>): BadgePresenter {
   let panel: HTMLDivElement | null = null;
   let status: HTMLParagraphElement | null = null;
   let list: HTMLDivElement | null = null;
   let exchange: HTMLAnchorElement | null = null;
+  let pricesNode: HTMLParagraphElement | null = null;
   let appid: number | null = null;
+  let currentPrices: BadgeSetPrices = { regular: null, foil: null };
   let token = 0;
   let progress: BadgeProgress | null = null;
   let badgeModal: BadgeModal | null = null;
 
   function ensurePanel(): { panel: HTMLDivElement; status: HTMLParagraphElement; list: HTMLDivElement } {
-    if (panel?.isConnected && status && list && exchange) return { panel, status, list };
+    if (panel?.isConnected && status && list && exchange && pricesNode) return { panel, status, list };
     panel = document.createElement('div');
     panel.className = 'steam-booster-badge-panel';
     panel.hidden = true;
     exchange = createExchangeLink();
+    pricesNode = document.createElement('p');
+    pricesNode.className = 'steam-booster-badge-prices';
+    pricesNode.hidden = true;
     status = document.createElement('p');
     status.className = 'steam-booster-badge-status';
     status.hidden = true;
     list = document.createElement('div');
     list.className = 'steam-booster-badge-levels';
-    panel.append(exchange, status, list);
+    panel.append(exchange, pricesNode, status, list);
     return { panel, status, list };
+  }
+
+  function paintPrices(node: HTMLElement | null, prices: BadgeSetPrices): void {
+    if (!node) return;
+    const caption = badgePriceCaption(prices);
+    node.hidden = caption.length === 0;
+    node.textContent = caption;
   }
 
   function paintExchange(link: HTMLAnchorElement | null): void {
@@ -311,25 +343,30 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     token += 1;
     const current = token;
     appid = request.appid;
+    currentPrices = { regular: null, foil: null };
     paintExchange(exchange);
+    paintPrices(pricesNode, currentPrices);
     if (badgeModal) paintExchange(badgeModal.exchange);
     view.panel.dataset.key = key;
     view.panel.hidden = false;
     slot.append(view.panel);
     showStatus(view.status, view.list, 'Loading badge levels…');
     const progressPromise = loadProgress().catch(() => null);
-    void loadLevels(request)
-      .then(async (loaded) => {
+    void loadPreview(request)
+      .then(async (preview) => {
         if (current !== token || !view.panel.isConnected) return;
         progress = null;
-        if (loaded.length === 0) {
+        currentPrices = preview.prices;
+        paintPrices(pricesNode, currentPrices);
+        if (badgeModal) paintPrices(badgeModal.prices, currentPrices);
+        if (preview.levels.length === 0) {
           showStatus(view.status, view.list, 'SteamCardExchange has no badge images for this card.');
           return;
         }
-        renderLevels(view.status, view.list, loaded, null);
+        renderLevels(view.status, view.list, preview.levels, null);
         progress = await progressPromise;
         if (current !== token || !view.panel.isConnected) return;
-        applyOwned(view.list, loaded, progress);
+        applyOwned(view.list, preview.levels, progress);
       })
       .catch((error: unknown) => {
         if (current !== token || !view.panel.isConnected) return;
@@ -481,7 +518,10 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     const count = document.createElement('span');
     count.className = 'steam-booster-badge-modal-count';
     const modalExchange = createExchangeLink();
-    figure.append(imageButton, label, name, count, modalExchange);
+    const modalPrices = document.createElement('p');
+    modalPrices.className = 'steam-booster-badge-prices';
+    modalPrices.hidden = true;
+    figure.append(imageButton, label, name, count, modalExchange, modalPrices);
     card.setAttribute('aria-labelledby', name.id);
     card.setAttribute('aria-describedby', label.id);
     card.append(closeButton, previous, figure, next);
@@ -497,12 +537,14 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
       name,
       count,
       exchange: modalExchange,
+      prices: modalPrices,
       levels: [],
       index: 0,
       source: root,
       returnFocus: null,
     };
     paintExchange(modalExchange);
+    paintPrices(modalPrices, currentPrices);
     return badgeModal;
   }
 
@@ -518,6 +560,7 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     badgeModal.imageButton.setAttribute('aria-label', `Next badge. Current badge: ${level.name}`);
     badgeModal.label.textContent = badgeLevelCaption(level);
     paintExchange(badgeModal.exchange);
+    paintPrices(badgeModal.prices, currentPrices);
     badgeModal.name.textContent = level.name;
     badgeModal.count.textContent = `${index + 1} of ${badgeModal.levels.length}`;
   }
@@ -584,6 +627,7 @@ interface BadgeModal {
   name: HTMLSpanElement;
   count: HTMLSpanElement;
   exchange: HTMLAnchorElement;
+  prices: HTMLParagraphElement;
   levels: BadgeLevel[];
   index: number;
   source: HTMLElement;
