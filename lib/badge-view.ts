@@ -1,4 +1,4 @@
-import { badgeRequestKey, stepBadgeIndex, type BadgeLevel, type BadgeRequest } from './badges';
+import { badgeLevelCaption, badgeRequestKey, cardExchangeGameUrl, stepBadgeIndex, type BadgeLevel, type BadgeRequest } from './badges';
 import { badgeIsOwned, type BadgeProgress } from './badge-progress';
 
 export const BADGE_STYLE = `
@@ -32,7 +32,7 @@ export const BADGE_STYLE = `
   row-gap: 8px;
 }
 .steam-booster-badge-level {
-  width: 64px;
+  width: 88px;
   margin: 0;
   min-width: 0;
   text-align: center;
@@ -60,17 +60,43 @@ export const BADGE_STYLE = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.steam-booster-badge-level-label {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  line-height: 1.2;
+}
 .steam-booster-badge-name {
   color: #8f98a0;
+}
+a.steam-booster-badge-exchange {
+  display: inline-block;
+  padding: 6px 10px;
+  border: 1px solid #2a475e;
+  background: #16202d;
+  color: #67c1f5;
+  font-size: 12px;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.steam-booster-badge-panel > a.steam-booster-badge-exchange {
+  margin: 0 0 8px;
+}
+.steam-booster-badge-modal-figure a.steam-booster-badge-exchange {
+  margin: 12px 0 0;
+}
+a.steam-booster-badge-exchange:hover {
+  color: #fff;
+  border-color: #67c1f5;
 }
 button.steam-booster-badge-level {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  width: 64px;
+  width: 88px;
   min-width: 0;
-  max-width: 64px;
+  max-width: 88px;
   appearance: none;
   border: 0;
   padding: 0;
@@ -161,7 +187,8 @@ button.steam-booster-badge-level:focus-visible {
 }
 .steam-booster-badge-modal-nav:focus-visible,
 .steam-booster-badge-modal-close:focus-visible,
-.steam-booster-badge-modal-image:focus-visible {
+.steam-booster-badge-modal-image:focus-visible,
+a.steam-booster-badge-exchange:focus-visible {
   outline: 1px solid #67c1f5;
   outline-offset: 2px;
 }
@@ -221,26 +248,51 @@ export interface BadgePresenter {
   destroy(): void;
 }
 
+function createExchangeLink(): HTMLAnchorElement {
+  const link = document.createElement('a');
+  link.className = 'steam-booster-badge-exchange';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'View on SteamCardExchange';
+  link.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
+  return link;
+}
+
 export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Promise<BadgeLevel[]>): BadgePresenter {
   let panel: HTMLDivElement | null = null;
   let status: HTMLParagraphElement | null = null;
   let list: HTMLDivElement | null = null;
+  let exchange: HTMLAnchorElement | null = null;
+  let appid: number | null = null;
   let token = 0;
   let progress: BadgeProgress | null = null;
   let badgeModal: BadgeModal | null = null;
 
   function ensurePanel(): { panel: HTMLDivElement; status: HTMLParagraphElement; list: HTMLDivElement } {
-    if (panel?.isConnected && status && list) return { panel, status, list };
+    if (panel?.isConnected && status && list && exchange) return { panel, status, list };
     panel = document.createElement('div');
     panel.className = 'steam-booster-badge-panel';
     panel.hidden = true;
+    exchange = createExchangeLink();
     status = document.createElement('p');
     status.className = 'steam-booster-badge-status';
     status.hidden = true;
     list = document.createElement('div');
     list.className = 'steam-booster-badge-levels';
-    panel.append(status, list);
+    panel.append(exchange, status, list);
     return { panel, status, list };
+  }
+
+  function paintExchange(link: HTMLAnchorElement | null): void {
+    if (!link) return;
+    if (appid == null) {
+      link.hidden = true;
+      return;
+    }
+    link.hidden = false;
+    link.href = cardExchangeGameUrl(appid);
   }
 
   function close(): void {
@@ -258,6 +310,9 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     }
     token += 1;
     const current = token;
+    appid = request.appid;
+    paintExchange(exchange);
+    if (badgeModal) paintExchange(badgeModal.exchange);
     view.panel.dataset.key = key;
     view.panel.hidden = false;
     slot.append(view.panel);
@@ -317,7 +372,7 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
         item.type = 'button';
         item.className = level.foil ? 'steam-booster-badge-level foil' : 'steam-booster-badge-level';
         item.dataset.index = String(index);
-        const label = level.foil ? 'Foil' : `Level ${level.level}`;
+        const label = badgeLevelCaption(level);
         item.dataset.label = `${label}, ${level.name}`;
         const owned = badgeIsOwned(level, ownedProgress);
         item.classList.toggle('owned', owned);
@@ -425,7 +480,8 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     name.className = 'steam-booster-badge-modal-name';
     const count = document.createElement('span');
     count.className = 'steam-booster-badge-modal-count';
-    figure.append(imageButton, label, name, count);
+    const modalExchange = createExchangeLink();
+    figure.append(imageButton, label, name, count, modalExchange);
     card.setAttribute('aria-labelledby', name.id);
     card.setAttribute('aria-describedby', label.id);
     card.append(closeButton, previous, figure, next);
@@ -440,11 +496,13 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
       label,
       name,
       count,
+      exchange: modalExchange,
       levels: [],
       index: 0,
       source: root,
       returnFocus: null,
     };
+    paintExchange(modalExchange);
     return badgeModal;
   }
 
@@ -458,7 +516,8 @@ export function createBadgePresenter(loadLevels: (request: BadgeRequest) => Prom
     badgeModal.imageButton.classList.toggle('foil', level.foil);
     badgeModal.imageButton.classList.toggle('owned', badgeIsOwned(level, progress));
     badgeModal.imageButton.setAttribute('aria-label', `Next badge. Current badge: ${level.name}`);
-    badgeModal.label.textContent = level.foil ? 'Foil' : `Level ${level.level}`;
+    badgeModal.label.textContent = badgeLevelCaption(level);
+    paintExchange(badgeModal.exchange);
     badgeModal.name.textContent = level.name;
     badgeModal.count.textContent = `${index + 1} of ${badgeModal.levels.length}`;
   }
@@ -524,6 +583,7 @@ interface BadgeModal {
   label: HTMLSpanElement;
   name: HTMLSpanElement;
   count: HTMLSpanElement;
+  exchange: HTMLAnchorElement;
   levels: BadgeLevel[];
   index: number;
   source: HTMLElement;

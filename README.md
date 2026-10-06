@@ -4,7 +4,7 @@
 
 Tools for Steam trading cards.
 
-On an inventory item, **Badge levels** shows the regular and foil badge artwork for that card. On the badges page, click the badge on the left of a game row. On a game's badge page, the next badge keeps its faded circle, now with that level's artwork, and clicking it opens the same list. Levels you already own have a green outline. That progress is read from Steam when you open the list, and it is not saved with the artwork. Click a level for a large view, then move through the set with the buttons or the arrow keys. The full badge title is shown there. Artwork is loaded from SteamCardExchange the first time you open a game, then kept in the extension's local storage.
+On an inventory item, **Badge levels** shows the regular and foil badge artwork for that card. On the badges page, click the badge on the left of a game row. On a game's badge page, the next badge keeps its faded circle, now with that level's artwork, and clicking it opens the same list. Levels you already own have a green outline. That progress is read from Steam when you open the list, and it is not saved with the artwork. Click a level for a large view, then move through the set with the buttons or the arrow keys. The full badge title is shown there. Sale and award badges can share one image across a range of levels, such as 10–14, and the label shows that range. **View on SteamCardExchange** opens the same game page. Artwork is loaded from SteamCardExchange the first time you open a game, then kept in the extension's local storage.
 
 On the [Booster Pack Creator](https://steamcommunity.com/tradingcards/boostercreator) page, **Rank by profit** opens a table of the packs you can craft. Each row uses the highest market buy order, or the lowest listing when nobody is bidding. The sort key is what you would receive after Steam's fees, divided by the gem cost.
 
@@ -18,7 +18,7 @@ The extension only reads Steam and SteamCardExchange. It does not craft packs, c
 - **Seller receives.** Steam keeps 5% and the publisher keeps 10%. Each fee is at least 1 cent. A buyer price of 60 cents leaves the seller 53 cents. A buyer price of 57 cents leaves 50 cents.
 - **Proceeds per gem.** Seller receives divided by gem cost. This is the default sort, highest first. **Vs selling gems** compares the pack with selling that many gems as sacks.
 - **Cache.** Quotes are stored in extension local storage for 30 minutes, keyed by wallet currency and app.
-- **Badge artwork.** A SteamCardExchange game page lists each badge level's image, name, and level, plus the foil badge. The background script fetches that page, because the inventory page cannot read it directly. The parsed catalog is stored under `badge-catalog-v1:<appid>` and kept, since the artwork does not change.
+- **Badge artwork.** A SteamCardExchange game page lists each badge level's image, name, and level requirement, including ranges such as 10–14 or 1000+. The background script fetches that page, because the inventory page cannot read it directly. The parsed catalog is stored under `badge-catalog-v2:<appid>` and kept, since the artwork does not change.
 
 ## Install
 

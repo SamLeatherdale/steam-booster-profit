@@ -1,5 +1,10 @@
 export interface BadgeLevel {
+  /** First crafted level that uses this artwork. */
   level: number;
+  /** Last crafted level that uses this artwork. Null when the upper bound is open or unknown. */
+  levelMax: number | null;
+  /** SteamCardExchange requirement, such as "Level 5", "Level 10 - 14", or "Level 1000+". */
+  levelLabel: string;
   name: string;
   imageUrl: string;
   foil: boolean;
@@ -75,7 +80,13 @@ export interface BadgeCatalogStore {
 }
 
 export function badgeCatalogKey(appid: number): string {
-  return `badge-catalog-v1:${appid}`;
+  return `badge-catalog-v2:${appid}`;
+}
+
+export function badgeLevelCaption(badge: Pick<BadgeLevel, 'foil' | 'levelLabel'>): string {
+  if (!badge.foil) return badge.levelLabel;
+  const detail = badge.levelLabel.replace(/^Level\s+/i, '');
+  return detail === '1' ? 'Foil' : `Foil ${detail}`;
 }
 
 export function parseCardExchangeBadges(html: string, series: number, foil: boolean): BadgeLevel[] {
@@ -152,14 +163,18 @@ function parseBadges(document: Document, series: number, foil: boolean): BadgeLe
     const imageUrl = badgeImageUrl(image.getAttribute('src') ?? '');
     if (!imageUrl) continue;
     const leaves = leafText(card);
-    const levelText = leaves.find((text) => /^Level\s+\d+$/i.test(text));
-    const parsedLevel = levelText ? Number(/\d+/.exec(levelText)?.[0]) : levels.length + 1;
-    if (!Number.isInteger(parsedLevel)) continue;
+    const requirement = leaves.map(parseLevelRequirement).find((parsed) => parsed != null);
+    const fallbackLevel = levels.length + 1;
+    const parsed = requirement ?? {
+      level: fallbackLevel,
+      levelMax: fallbackLevel,
+      levelLabel: `Level ${fallbackLevel}`,
+    };
     const name =
-      leaves.find((text) => !/^Level\s+\d+$/i.test(text) && !/^XP:/i.test(text)) ||
+      leaves.find((text) => parseLevelRequirement(text) == null && !/^XP:/i.test(text)) ||
       nameFromAlt(image.getAttribute('alt') ?? '');
     if (!name) continue;
-    levels.push({ level: parsedLevel, name, imageUrl, foil });
+    levels.push({ ...parsed, name, imageUrl, foil });
   }
   return levels.sort((left, right) => left.level - right.level);
 }
@@ -256,10 +271,46 @@ function readBadgeLevel(value: unknown): BadgeLevel | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Partial<BadgeLevel>;
   if (typeof record.level !== 'number' || !Number.isSafeInteger(record.level) || record.level < 1) return null;
+  if (record.levelMax === undefined) return null;
+  if (typeof record.levelMax === 'number') {
+    if (!Number.isSafeInteger(record.levelMax) || record.levelMax < record.level) return null;
+  } else if (record.levelMax !== null) {
+    return null;
+  }
+  if (typeof record.levelLabel !== 'string' || record.levelLabel.trim().length === 0) return null;
   if (typeof record.name !== 'string' || record.name.trim().length === 0) return null;
   if (typeof record.imageUrl !== 'string' || badgeImageUrl(record.imageUrl) !== record.imageUrl) return null;
   if (typeof record.foil !== 'boolean') return null;
-  return { level: record.level, name: record.name, imageUrl: record.imageUrl, foil: record.foil };
+  return {
+    level: record.level,
+    levelMax: record.levelMax,
+    levelLabel: record.levelLabel.trim(),
+    name: record.name,
+    imageUrl: record.imageUrl,
+    foil: record.foil,
+  };
+}
+
+function parseLevelRequirement(text: string): Pick<BadgeLevel, 'level' | 'levelMax' | 'levelLabel'> | null {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  const match = /^Level\s+(\d+)(.*)$/i.exec(normalized);
+  if (!match?.[1]) return null;
+  const level = Number(match[1]);
+  if (!Number.isSafeInteger(level) || level < 1) return null;
+  const rest = (match[2] ?? '').trim();
+  if (rest === '') return { level, levelMax: level, levelLabel: `Level ${level}` };
+  if (rest === '+') return { level, levelMax: null, levelLabel: `Level ${level}+` };
+  const range = /^[-–—]\s*(\d+|\?+)$/.exec(rest);
+  if (range?.[1] && /^\?+$/.test(range[1])) {
+    return { level, levelMax: null, levelLabel: `Level ${level} - ${range[1]}` };
+  }
+  if (range?.[1] && /^\d+$/.test(range[1])) {
+    const levelMax = Number(range[1]);
+    if (Number.isSafeInteger(levelMax) && levelMax >= level) {
+      return { level, levelMax, levelLabel: `Level ${level} - ${levelMax}` };
+    }
+  }
+  return { level, levelMax: null, levelLabel: normalized };
 }
 
 function badgeImageUrl(src: string): string | null {

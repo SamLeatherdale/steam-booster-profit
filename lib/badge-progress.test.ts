@@ -11,9 +11,19 @@ import {
 } from './badge-progress';
 
 const levels: BadgeLevel[] = [
-  { level: 1, name: 'Beachcomber', imageUrl: 'https://example.test/1.png', foil: false },
-  { level: 2, name: 'Trailblazer', imageUrl: 'https://example.test/2.png', foil: false },
-  { level: 1, name: 'Lookout', imageUrl: 'https://example.test/foil.png', foil: true },
+  { level: 1, levelMax: 1, levelLabel: 'Level 1', name: 'Beachcomber', imageUrl: 'https://example.test/1.png', foil: false },
+  { level: 2, levelMax: 2, levelLabel: 'Level 2', name: 'Trailblazer', imageUrl: 'https://example.test/2.png', foil: false },
+  { level: 1, levelMax: 1, levelLabel: 'Level 1', name: 'Lookout', imageUrl: 'https://example.test/foil.png', foil: true },
+];
+
+const saleLevels: BadgeLevel[] = [
+  { level: 9, levelMax: 9, levelLabel: 'Level 9', name: 'Nine', imageUrl: 'https://example.test/9.png', foil: false },
+  { level: 10, levelMax: 14, levelLabel: 'Level 10 - 14', name: 'Ten', imageUrl: 'https://example.test/10.png', foil: false },
+  { level: 15, levelMax: 29, levelLabel: 'Level 15 - 29', name: 'Fifteen', imageUrl: 'https://example.test/15.png', foil: false },
+  { level: 1000, levelMax: null, levelLabel: 'Level 1000+', name: 'Thousand', imageUrl: 'https://example.test/1000.png', foil: false },
+  { level: 15000, levelMax: null, levelLabel: 'Level 15000 - ???', name: 'Top', imageUrl: 'https://example.test/15000.png', foil: false },
+  { level: 1, levelMax: 4, levelLabel: 'Level 1 - 4', name: 'Foil low', imageUrl: 'https://example.test/foil-low.png', foil: true },
+  { level: 5, levelMax: null, levelLabel: 'Level 5 - ??', name: 'Foil high', imageUrl: 'https://example.test/foil-high.png', foil: true },
 ];
 
 const gamecards = `
@@ -45,15 +55,33 @@ describe('badge progress', () => {
 
   it('keeps foil ownership separate from the regular level', () => {
     const progress = badgeProgressFromTracks({ owned: true, level: 2 }, { owned: false, level: 0 });
-    expect(progress).toEqual({ level: 2, foil: false });
+    expect(progress).toEqual({ level: 2, foil: false, foilLevel: 0 });
     expect(badgeIsOwned(levels[0]!, progress)).toBe(true);
     expect(badgeIsOwned(levels[1]!, progress)).toBe(true);
     expect(badgeIsOwned({ level: 3, foil: false }, progress)).toBe(false);
     expect(badgeIsOwned(levels[2]!, progress)).toBe(false);
-    expect(badgeIsOwned(levels[2]!, { level: 2, foil: true })).toBe(true);
-    expect(nextBadgeLevel(levels, { level: 1, foil: false }, false)?.name).toBe('Trailblazer');
-    expect(nextBadgeLevel(levels, { level: 2, foil: false }, true)?.name).toBe('Lookout');
-    expect(nextBadgeLevel(levels, { level: 2, foil: true }, true)).toBeNull();
+    expect(badgeIsOwned(levels[2]!, { level: 2, foil: true, foilLevel: 1 })).toBe(true);
+    expect(nextBadgeLevel(levels, { level: 1, foil: false, foilLevel: 0 }, false)?.name).toBe('Trailblazer');
+    expect(nextBadgeLevel(levels, { level: 2, foil: false, foilLevel: 0 }, true)?.name).toBe('Lookout');
+    expect(nextBadgeLevel(levels, { level: 2, foil: true, foilLevel: 1 }, true)).toBeNull();
+  });
+
+  it('follows level ranges when the next craft stays on the same artwork', () => {
+    const midway = { level: 12, foil: true, foilLevel: 2 };
+    expect(badgeIsOwned(saleLevels[1]!, midway)).toBe(true);
+    expect(badgeIsOwned(saleLevels[2]!, midway)).toBe(false);
+    expect(badgeIsOwned(saleLevels[5]!, midway)).toBe(true);
+    expect(badgeIsOwned(saleLevels[6]!, midway)).toBe(false);
+    expect(nextBadgeLevel(saleLevels, { level: 12, foil: false, foilLevel: 0 }, false)?.name).toBe('Ten');
+    expect(nextBadgeLevel(saleLevels, { level: 14, foil: false, foilLevel: 0 }, false)?.name).toBe('Fifteen');
+    expect(nextBadgeLevel(saleLevels, { level: 5000, foil: false, foilLevel: 0 }, false)?.name).toBe('Thousand');
+    expect(nextBadgeLevel(saleLevels, { level: 14999, foil: false, foilLevel: 0 }, false)?.name).toBe('Top');
+    expect(nextBadgeLevel(saleLevels, { level: 4, foil: true, foilLevel: 4 }, true)?.name).toBe('Foil high');
+    expect(nextBadgeLevel(saleLevels, { level: 1, foil: true, foilLevel: 2 }, true)?.name).toBe('Foil low');
+    const unknownFoil = badgeProgressFromTracks({ owned: true, level: 2 }, { owned: true, level: null });
+    expect(unknownFoil).toEqual({ level: 2, foil: true, foilLevel: null });
+    expect(badgeIsOwned(saleLevels[6]!, unknownFoil)).toBe(true);
+    expect(nextBadgeLevel(saleLevels, unknownFoil!, true)).toBeNull();
   });
 
   it('parses game badge rows and the normal and foil progress urls', () => {

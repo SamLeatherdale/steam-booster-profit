@@ -4,6 +4,7 @@ import {
   appidFromGamecardsHref,
   stepBadgeIndex,
   badgeCatalogKey,
+  badgeLevelCaption,
   badgeRequestKey,
   createBadgeLoader,
   extractBadgeCatalog,
@@ -15,6 +16,45 @@ import {
   selectBadgeLevels,
   seriesForCardName,
 } from './badges';
+
+const summerSale = `
+<div class="header"><span id="series-1-badges"></span></div>
+<div class="grid">
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/lvl9.png" alt="Series 1 - Summer Sale 2021 - Lvl 9">
+    <div>Summer Sale 2021 - Lvl 9</div>
+    <div><div>Level 9</div><div>XP: 900</div></div>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/lvl10.png" alt="Series 1 - Summer Sale 2021 - Lvl 10">
+    <div>Summer Sale 2021 - Lvl 10</div>
+    <div><div>Level 10 - 14</div><div>XP: 1000 - 1400</div></div>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/lvl1000.png" alt="Series 1 - Summer Sale 2021 - Lvl 1000">
+    <div>Summer Sale 2021 - Lvl 1000</div>
+    <div><div>Level 1000+</div><div>XP: 100000+</div></div>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/lvl15000.png" alt="Series 1 - Summer Sale 2021 - Lvl 15000">
+    <div>Summer Sale 2021 - Lvl 15000</div>
+    <div><div>Level 15000 - ???</div><div>XP: 1500000 - ???</div></div>
+  </div>
+</div>
+<div class="header"><span id="series-1-foilbadges"></span></div>
+<div class="grid">
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/foil1.png" alt="Series 1 - Summer Sale 2021 Foil - Lvl 1">
+    <div>Summer Sale 2021 Foil - Lvl 1</div>
+    <div><div>Level 1 - 4</div><div>XP: 100 - 400</div></div>
+  </div>
+  <div>
+    <img src="https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/1658760/foil10.png" alt="Series 1 - Summer Sale 2021 Foil - Lvl 10">
+    <div>Summer Sale 2021 Foil - Lvl 10</div>
+    <div><div>Level 10 - ??</div></div>
+  </div>
+</div>
+`;
 
 const firewatch = `
 <div class="header">
@@ -68,12 +108,16 @@ describe('badge pages', () => {
     expect(parseCardExchangeBadges(firewatch, 1, false)).toEqual([
       {
         level: 1,
+        levelMax: 1,
+        levelLabel: 'Level 1',
         name: 'Communicator',
         imageUrl: 'https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/383870/level1.png',
         foil: false,
       },
       {
         level: 2,
+        levelMax: 2,
+        levelLabel: 'Level 2',
         name: 'Cartographer',
         imageUrl: 'https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/383870/level2.png',
         foil: false,
@@ -85,23 +129,47 @@ describe('badge pages', () => {
     expect(parseCardExchangeBadges(firewatch, 1, true).map((badge) => badge.name)).toEqual(['Lookout']);
   });
 
+  it('keeps sale badge ranges instead of counting every image from 1', () => {
+    const badges = parseCardExchangeBadges(summerSale, 1, false);
+    expect(badges.map((badge) => [badge.level, badge.levelMax, badge.levelLabel])).toEqual([
+      [9, 9, 'Level 9'],
+      [10, 14, 'Level 10 - 14'],
+      [1000, null, 'Level 1000+'],
+      [15000, null, 'Level 15000 - ???'],
+    ]);
+    expect(parseCardExchangeBadges(summerSale, 1, true).map((badge) => badge.levelLabel)).toEqual([
+      'Level 1 - 4',
+      'Level 10 - ??',
+    ]);
+    expect(badgeLevelCaption(badges[1]!)).toBe('Level 10 - 14');
+    expect(badgeLevelCaption({ foil: true, levelLabel: 'Level 1' })).toBe('Foil');
+    expect(badgeLevelCaption({ foil: true, levelLabel: 'Level 1 - 4' })).toBe('Foil 1 - 4');
+    expect(badgeLevelCaption({ foil: true, levelLabel: 'Level 1000+' })).toBe('Foil 1000+');
+  });
+
   it('picks the series that contains the card name and appends that series foil badge', () => {
     expect(seriesForCardName(firewatch, 'You Fell Off')).toBe(2);
     expect(selectBadgeLevels(firewatch, { cardName: 'Volunteer', seriesHint: null })).toEqual([
       {
         level: 1,
+        levelMax: 1,
+        levelLabel: 'Level 1',
         name: 'Communicator',
         imageUrl: 'https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/383870/level1.png',
         foil: false,
       },
       {
         level: 2,
+        levelMax: 2,
+        levelLabel: 'Level 2',
         name: 'Cartographer',
         imageUrl: 'https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/383870/level2.png',
         foil: false,
       },
       {
         level: 1,
+        levelMax: 1,
+        levelLabel: 'Level 1',
         name: 'Lookout',
         imageUrl: 'https://shared.fastly.steamstatic.com/community_assets/images/items/383870/foil.png',
         foil: true,
@@ -110,6 +178,8 @@ describe('badge pages', () => {
     expect(selectBadgeLevels(firewatch, { cardName: 'You Fell Off', seriesHint: 1 })).toEqual([
       {
         level: 1,
+        levelMax: 1,
+        levelLabel: 'Level 1',
         name: 'Ascent',
         imageUrl: 'https://shared.fastly.steamstatic.com/community_assets/images/items/3527290/peak.png',
         foil: false,
@@ -170,8 +240,23 @@ describe('badge catalog cache', () => {
     expect(catalog.cards['you fell off']).toBe(2);
     expect(catalog.series['1']?.map((badge) => badge.name)).toEqual(['Communicator', 'Cartographer', 'Lookout']);
     expect(readBadgeCatalog(catalog)?.series['2']?.[0]?.name).toBe('Ascent');
-    expect(badgeCatalogKey(383870)).toBe('badge-catalog-v1:383870');
+    expect(badgeCatalogKey(383870)).toBe('badge-catalog-v2:383870');
     expect(readBadgeCatalog({ cards: {}, series: { '1': [{ level: 1, name: 'A', imageUrl: 'javascript:alert(1)', foil: false }] } })).toBeNull();
+    expect(
+      readBadgeCatalog({
+        cards: {},
+        series: {
+          '1': [
+            {
+              level: 1,
+              name: 'A',
+              imageUrl: 'https://steamcdn-a.akamaihd.net/steamcommunity/public/images/items/383870/level1.png',
+              foil: false,
+            },
+          ],
+        },
+      }),
+    ).toBeNull();
   });
 
   it('reuses a stored catalog without fetching', async () => {

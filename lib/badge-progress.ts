@@ -8,6 +8,8 @@ export interface BadgeTrack {
 export interface BadgeProgress {
   level: number;
   foil: boolean;
+  /** Crafted foil level. Null when a foil badge is owned but its level could not be read. */
+  foilLevel: number | null;
 }
 
 export interface BadgeRowIdentity {
@@ -63,15 +65,20 @@ export function readGamecardsTrack(html: string): BadgeTrack | null {
 
 export function badgeProgressFromTracks(normal: BadgeTrack | null, foil: BadgeTrack | null): BadgeProgress | null {
   if (!normal && !foil) return null;
+  const foilOwned = foil?.owned ?? false;
   return {
     level: normal?.owned ? (normal.level ?? 0) : 0,
-    foil: foil?.owned ?? false,
+    foil: foilOwned,
+    foilLevel: foilOwned ? (foil?.level ?? null) : 0,
   };
 }
 
 export function badgeIsOwned(level: Pick<BadgeLevel, 'level' | 'foil'>, progress: BadgeProgress | null): boolean {
   if (!progress) return false;
-  if (level.foil) return progress.foil;
+  if (level.foil) {
+    if (progress.foilLevel == null) return progress.foil;
+    return level.level <= progress.foilLevel;
+  }
   return level.level <= progress.level;
 }
 
@@ -81,8 +88,20 @@ export function nextBadgeLevel(
   foilPage: boolean,
 ): BadgeLevel | null {
   if (foilPage) {
-    if (progress.foil) return null;
-    return levels.find((level) => level.foil) ?? null;
+    if (progress.foilLevel == null) return null;
+    return badgeForCraftedLevel(levels, progress.foilLevel + 1, true);
   }
-  return levels.find((level) => !level.foil && level.level === progress.level + 1) ?? null;
+  return badgeForCraftedLevel(levels, progress.level + 1, false);
+}
+
+function badgeForCraftedLevel(levels: readonly BadgeLevel[], craftLevel: number, foil: boolean): BadgeLevel | null {
+  const group = levels.filter((badge) => badge.foil === foil).sort((left, right) => left.level - right.level);
+  for (let index = 0; index < group.length; index += 1) {
+    const badge = group[index];
+    if (!badge) continue;
+    const next = group[index + 1];
+    const end = badge.levelMax ?? (next ? next.level - 1 : Number.POSITIVE_INFINITY);
+    if (craftLevel >= badge.level && craftLevel <= end) return badge;
+  }
+  return null;
 }
